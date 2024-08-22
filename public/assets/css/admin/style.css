@@ -1,0 +1,10 @@
+.error{
+    color: red;
+}
+.required:after {
+    content:" *";
+    color: red;
+}
+.align-items-center {
+    float: right;
+}

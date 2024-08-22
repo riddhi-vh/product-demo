@@ -166,6 +166,15 @@ return [
         'attribute-name' => [
             'rule-name' => 'custom-message',
         ],
+        'common_exists' => 'The :attribute already exists.',
+        'common_required' => 'Please Enter :attribute.',
+        'max_25_validation' => 'Maximum 25 Character is allowed.',
+        'email_required' => 'Please Enter Email.',
+        'password_required' => 'Please Enter :attribute.',
+        'max_8_validation' => 'Maximum 25 Character is allowed.',
+        'regex_validation' =>  'Password Content at least 1 lowercase, 1 uppercase, 1 special character and 1 number.',
+        'price_regex' => 'Please Enter valid :attribute.',
+        'price_not_in' => 'The :attribute must be greater than 0.',
     ],
 
     /*

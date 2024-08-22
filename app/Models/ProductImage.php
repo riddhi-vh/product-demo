@@ -9,6 +9,7 @@ class ProductImage extends Model
 {
     use HasFactory;
     public $timestamps = false;
+    protected $guarded = ['id'];
 
     public $table = 'product_images';
     public $fillable = ['p_id','p_image'];

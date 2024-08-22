@@ -22,7 +22,9 @@ class RedirectIfAuthenticated
         $guards = empty($guards) ? [null] : $guards;
 
         foreach ($guards as $guard) {
-            if (Auth::guard($guard)->check()) {
+            info($request->email);
+            if (Auth::guard('web')->attempt(['email' => $request->email, 'password' => $request->password])|| 
+            Auth::guard('web')->attempt(['mobile_no' => $request->email, 'password' => $request->password])) {
                 return redirect(RouteServiceProvider::HOME);
             }
         }

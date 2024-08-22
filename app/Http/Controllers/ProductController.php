@@ -3,15 +3,23 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
-use App\Models\Product;
-use App\Models\ProductImage;
-use App\Models\Package;
-use App\Helpers\Utility;
+use DB;
+use App\Interfaces\ProductRepositoryInterface;
+use App\Interfaces\PackageRepositoryInterface;
+use App\Interfaces\ProductImageRepositoryInterface;
+use App\Http\Requests\ProductRequest;
+use Exception;
 
 class ProductController extends Controller
 {
-    public function __construct()
+    protected $productRepository = "";
+    protected $packageRepository = "";
+    protected $productImageRepository = "";
+    public function __construct(ProductRepositoryInterface $productRepository, PackageRepositoryInterface $packageRepository, ProductImageRepositoryInterface $productImageRepository)
     {
+        $this->productRepository = $productRepository;
+        $this->packageRepository = $packageRepository;
+        $this->productImageRepository = $productImageRepository;
         $this->middleware('auth');
     }
 
@@ -20,21 +28,73 @@ class ProductController extends Controller
      *
      * @return \Illuminate\Http\Response
      */
-    public function index()
+    public function index(Request $request)
     {
-        $trimmedName = Utility::currentdate();
-        $products = Product::get();
-        foreach($products as $key => $pro){
-            $products[$key]->quantity = $pro->p_quantity;
-            if($pro->p_package == 'GM'){
-                $products[$key]->quantity = $pro->p_quantity / 1000 ;   
-            }else if($pro->p_package == 'ML'){
-                $products[$key]->quantity = $pro->p_quantity / 1000000;
-            }
-        }
-        return view('product.product_list',['products' => $products]);
+        return view('product.product_list');
     }
 
+    public function getData(Request $request)
+    {
+        $draw = $request->get('draw');
+        $start = $request->get("start");
+
+        $columnIndexArray = $request->get('order');
+        $columnNameArray = $request->get('columns');
+        $orderArray = $request->get('order');
+        $searchArray = $request->get('search');
+
+        $columnIndex = $columnIndexArray[0]['column'];
+        $columnName = $columnNameArray[$columnIndex]['data'];
+        $columnSortOrder = $orderArray[0]['dir'];
+        $searchValue = $searchArray;
+
+        $totalRecords = $this->productRepository->countData();
+        $rowPerPage = $request->length == '-1' ? $totalRecords : $request->length;
+        
+        $totalRecordswithFilter = $this->productRepository->countData($searchValue);
+        
+        $records = $this->productRepository->getData($columnName, $columnSortOrder, $searchValue, $start, $rowPerPage);
+        $dataArray = array();
+        $start += 1;
+        foreach ($records as $record) {
+            $id = $record->id;
+            $action = '';
+            $action .= '<div style="float:right;"><a href="' . route('products.edit', $id) . '" title="Edit" class="navi-link" style="margin-right: 7px;">
+                                       <span class="navi-icon">
+                                           <i class="fa fa-edit text-primary" style="font-size:1.5rem;"></i>
+                                       </span>
+                                   </a>';
+
+            $action .= ' <a href="javascript:void(0);" data-route="'.route("products.destroy",$id).'" data-id="' . $id . '" class="navi-link delToolType deleteProduct" title="Delete">
+                                   <span class="navi-icon">
+                                       <i class="fa fa-trash text-danger" style="font-size:1.5rem;"></i>
+                                   </span>
+                               </a> </div>';
+            $quantity = $record->p_quantity;
+            if($record->p_package == 'GM'){
+                $quantity = $record->p_quantity / 1000 ;   
+            }else if($record->p_package == 'ML'){
+                $quantity = $record->p_quantity / 1000000;
+            }
+            $dataArray[] = array(
+                "id" => $start,
+                "p_code" => $record->p_code,
+                "p_name" => $record->p_name,
+                "p_package" => $record->p_package,
+                "p_quantity" => $quantity,
+                "action" => $action,
+            );
+            $start++;
+        }
+
+        $response = array(
+            "draw" => intval($draw),
+            "iTotalRecords" => $totalRecords,
+            "iTotalDisplayRecords" => $totalRecordswithFilter,
+            "aaData" => $dataArray,
+        );
+        return response()->json($response);
+    }
     /**
      * Show the form for creating a new resource.
      *
@@ -42,7 +102,7 @@ class ProductController extends Controller
      */
     public function create()
     {
-        $package = Package::get();
+        $package = $this->packageRepository->getAllData();
         return view('product.product_save',['packages' => $package]);
     }
 
@@ -52,49 +112,34 @@ class ProductController extends Controller
      * @param  \Illuminate\Http\Request  $request
      * @return \Illuminate\Http\Response
      */
-    public function save(Request $request)
+    public function store(ProductRequest $request)
     {
-        $post = $request->all();
-        /* Check mode of request if it is add mode, insert record otherwise uypdate record.  */
-        if(isset($post['mode']) && $post['mode'] == 'create'){
-            // Call validation rule
-            $this->productValidationRule($request,0);
-
-            $model = new Product();
-            $model->created_at = Utility::currentdate();
-        }else if(isset($post['mode']) && $post['mode'] == 'edit'){
-            $id = $request['id'];
-            // Call validation rule
-            $this->productValidationRule($request,$id);
-
-            $model = Product::find($id);
-            $model->updated_at = Utility::currentdate();
-            // Remove old images in case the images are removed.
-            if(isset($request->oldimages) && !empty($request->oldimages)){
-                $eximage = explode(',',$request->oldimages);
+        DB::beginTransaction();
+        try {
+            $reqData = $request->all();
+            if (isset($request->id) && $request->id != null && $request->id > 0) {
+                $data = $this->productRepository->updateData($request->id, $reqData);
+                $msg = 'messages.custom.update_messages';
+            } else {
+                $data = $this->productRepository->storeData($reqData);
+                $reqData['id'] = $data->id;
+                $msg = 'messages.custom.create_messages';
+            }
+            if(isset($reqData['file'])  && !empty($reqData['file'])){
+                $this->productImageRepository->storeImages($reqData);
+            }
+            if(isset($reqData['oldimages']) && !empty($reqData['oldimages'])){
+                $eximage = explode(',',$reqData['oldimages']);
                 foreach($eximage as $eximg){
-                    ProductImage::where('id',$eximg)->delete();
+                    $this->productImageRepository->deleteImage($eximg);
                 }
             }
+            DB::commit();
+            return redirect()->route('products.index')->with('message', trans($msg,["attribute" => "Product"]));
+        } catch (\Exception $e) {
+            DB::rollback();
+            return redirect()->route('products.index')->with('message', 'Product not saved. Something went to wrong !');
         }
-
-        $model->p_name = $request->input('p_name');
-        $model->p_code = $request->input('p_code');
-        $model->p_package = $request->input('p_package');
-        $model->p_quantity = $request->input('p_quantity');
-        $model->p_description = $request->input('p_description');
-        $model->save();
-
-        if(isset($post['file'])  && !empty($post['file'])){
-            foreach($post['file'] as $file){
-                $filename = $file->store('public/images');
-                ProductImage::create([
-                    'p_id' => $model->id,
-                    'p_image' => $filename
-                ]);
-            } 
-        }
-        return redirect()->route('product-list')->with('message', 'Product saved successfully!');
     }
 
     /**
@@ -106,9 +151,9 @@ class ProductController extends Controller
     public function edit($id)
     {
         $mode = 'edit';
-        $product = Product::find($id);
-        $productImages = ProductImage::where('p_id',$id)->get();
-        $package = Package::get();
+        $product = $this->productRepository->getFindData($id);
+        $productImages = $this->productImageRepository->getFindData($id);
+        $package = $this->packageRepository->getAllData();
         return view('product.product_save',['mode' => $mode,'product' => $product,'productImages'=> $productImages,'packages' => $package]);
     }
 
@@ -120,48 +165,14 @@ class ProductController extends Controller
      */
     public function destroy($id)
     {
-        $product = Product::find($id);
-        if($product){
-            $product->delete();
+        try{
+            $this->productRepository->deleteData($id);
+            return $this->sendResponse(true, ['data' => []], trans(
+                'messages.custom.delete_messages',
+                ["attribute" => "Product"]
+            ));
+        }catch(Exception $e){
+            return redirect()->route('products.index')->with('message', trans('message.custom.something_wrong')); 
         }
-        return redirect()->route('product-list')->with('message', 'Product deleted successfully!');
-    }
-
-    public function productValidationRule($request,$id){
-
-        if($id > 0){
-            $rules = [
-                'p_name' => ['required', 'string', 'max:255'],
-                'p_code' => ['required', 'string', 'max:255', 'unique:product,p_code,'.$id],
-                'p_package'=> ['required'],
-                'p_quantity'=> ['required','numeric'],
-                'p_description'=> ['required'],
-            ];
-        }else{
-            $rules = [
-                'p_name' => ['required', 'string', 'max:255'],
-                'p_code' => ['required', 'string', 'max:255', 'unique:product'],
-                'p_package'=> ['required'],
-                'p_quantity'=> ['required','numeric'],
-                'p_description'=> ['required'],
-            ];
-        }
-        
-        // Custom show messages
-        $customMessages = [
-            'p_name.required' => 'The product name field is required.',
-            'p_name.max' => 'The product name is not valid.',
-            'p_name.string' => 'The product name is not valid.',
-            'p_code.required' => 'The product code field is required.',
-            'p_code.max' => 'The product name is not valid.',
-            'p_code.string' => 'The product name is not valid.',
-            'p_code.unique' => 'The product code is already in used.',
-            'p_package.required' => 'The product package field is required.',
-            'p_description.required' => 'The product description field is required.',
-            'p_quantity.required' => 'The product quantity field is required.',
-            'p_quantity.numeric' => 'The product quantity is not valid.'
-        ];
-    
-        return $this->validate($request, $rules, $customMessages);
     }
 }
